@@ -2,10 +2,10 @@ import os
 from tkinter import *
 import datetime
 from tkinter import filedialog
-
 import pygame
 from PIL import Image, ImageTk
 from tkVideoPlayer import TkinterVideo
+from mutagen import File
 
 # Initialize pygame mixer for audio
 pygame.mixer.init()
@@ -44,51 +44,104 @@ def update_duration(event):
     progress_slider["to"] = duration
 
 
+def update_audio_progress():
+    """Update the progress slider and current time for audio playback."""
+    if is_audio_playing:
+        current_pos = pygame.mixer.music.get_pos() / 1000.0
+        progress_value.set(int(current_pos))
+        current_time_label.config(text=str(datetime.timedelta(seconds=int(current_pos))))
+        root.after(100, update_audio_progress)
+
+
 def update_progress(event):
     """Update the progress slider based on the current playback position."""
     progress_value.set(int(player.current_duration()))
+    current_pos = int(progress_slider.get())
+    current_time_label.config(text=str(datetime.timedelta(seconds=current_pos)))
+
+
+# Flags to track if media is playing
+is_video_playing = False
+is_audio_playing = False
 
 
 def open_file():
-    """Open file."""
-    # Ask user to select a file
+    """Open video or audio file"""
+    global is_video_playing, is_audio_playing
+
     file_path = filedialog.askopenfilename(filetypes=[("Video Files", "*.mp4;*.avi;*.mov;*.mkv"),
                                                       ("Audio Files", "*.mp3;*.wav;*.flac;*.aac;*.ogg")])
     if file_path:
-        # Check file extension to determine if it's audio or video
         _, file_extension = os.path.splitext(file_path)
 
+        if is_video_playing:
+            player.stop()
+            player.pack_forget()
+            play_pause_btn["text"] = "Play"
+            is_video_playing = False
+        elif is_audio_playing:
+            pygame.mixer.music.stop()
+            is_audio_playing = False
+            play_pause_btn["text"] = "Play"
+
         if file_extension.lower() in ['.mp4', '.avi', '.mov', '.mkv']:
-            # It's a video file, load it in TkinterVideo
             player.load(file_path)
             player.play()
-            play_pause_btn.config(text="Pause")
-
+            play_pause_btn["text"] = "Pause"
+            is_video_playing = True
         elif file_extension.lower() in ['.mp3', '.wav', '.flac', '.aac', '.ogg']:
-            # It's an audio file, use pygame to play it
             pygame.mixer.music.load(file_path)
             pygame.mixer.music.play()
+            play_pause_btn["text"] = "Pause"
+            is_audio_playing = True
+
+            audio_file = File(file_path)
+            audio_duration = audio_file.info.length
+            end_time_label.config(text=str(datetime.timedelta(seconds=audio_duration)))
+            progress_slider["to"] = audio_duration
+
+            update_audio_progress()
 
 
 def seek(value):
     """Seek the video to a specific position."""
-    player.seek(int(value))
+    if is_video_playing:
+        player.seek(int(value))
+    elif is_audio_playing:
+        pygame.mixer.music.set_pos(int(value))
 
 
 def skip(value):
     """Skip forward or backward by a specified number of seconds."""
-    player.seek(int(progress_slider.get()) + value)
-    progress_value.set(progress_slider.get() + value)
+    new_pos = int(progress_slider.get()) + value
+    new_pos = max(0, min(new_pos, progress_slider["to"]))
+    progress_value.set(new_pos)
+
+    if is_video_playing:
+        player.seek(new_pos)
+    elif is_audio_playing:
+        pygame.mixer.music.set_pos(new_pos)
+        current_time_label.config(text=str(datetime.timedelta(seconds=new_pos)))
+
+    progress_slider.set(new_pos)
 
 
 def play_pause():
-    """Toggle between play and pause."""
-    if player.is_paused():
-        player.play()
-        play_pause_btn.config(text="Pause")
-    else:
-        player.pause()
-        play_pause_btn.config(text="Play")
+    """Toggle between play and pause for both video and audio."""
+    if is_video_playing:
+        if player.is_paused():
+            player.play()
+            play_pause_btn.config(text="Pause")
+        else:
+            player.pause()
+            play_pause_btn.config(text="Play")
+    elif is_audio_playing:
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.pause()
+            play_pause_btn.config(text="Play")
+        else:
+            pygame.mixer.music.unpause()
+            play_pause_btn.config(text="Pause")
 
 
 def video_ended(event):
@@ -106,14 +159,14 @@ def create_image_button(image_path, rotation=0, command=None):
     photo_img = ImageTk.PhotoImage(img)
     btn = Button(control_panel, image=photo_img, bg=BACKGROUND_COLOR, activebackground=BACKGROUND_COLOR,
                  command=command, borderwidth=0)
-    btn.image = photo_img  # Prevent garbage collection
+    btn.image = photo_img
     return btn
 
 
-# --- Styling Components ---
 # Time labels
-start_time_label = Label(control_panel, text="0:00:00", bg=BACKGROUND_COLOR, fg=TEXT_COLOR, font=("Arial", 12))
-start_time_label.pack(side="left", padx=10)
+
+current_time_label = Label(control_panel, text="0:00:00", bg=BACKGROUND_COLOR, fg=TEXT_COLOR, font=("Arial", 12))
+current_time_label.pack(side="left", padx=10)
 
 end_time_label = Label(control_panel, text="0:00:00", bg=BACKGROUND_COLOR, fg=TEXT_COLOR, font=("Arial", 12))
 end_time_label.pack(side="right", padx=10)
@@ -142,14 +195,14 @@ progress_slider = Scale(
 progress_slider.pack(side="left", fill="x", expand=True, padx=10)
 
 # Backward button
-back_btn = create_image_button("resources/forward.png", rotation=180, command=lambda: skip(-5))
+back_btn = create_image_button("resources/forward.png", rotation=180, command=lambda: skip(5))
 back_btn.pack(side="left", padx=10)
 
-# Create a container frame for the buttons
+# Container frame for the buttons
 button_frame = Frame(root, bg="#FFFFFF")
 button_frame.pack(side="top", anchor="nw", padx=10, pady=10)
 
-# Open video button
+# Video button
 open_btn = Button(
     button_frame,
     text="Open",
